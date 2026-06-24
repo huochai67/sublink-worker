@@ -66,10 +66,30 @@ describe('buildClashExternalProxyGroups', () => {
             {
                 name: '🇭🇰 香港节点',
                 type: 'url-test',
+                proxies: ['香港 01', '日本 01'],
                 filter: '(港|HK)',
                 url: 'http://www.gstatic.com/generate_204',
                 interval: 300,
                 tolerance: 50
+            }
+        ]);
+    });
+
+    it('select group with regex token gets proxies and filter', () => {
+        const groups = buildClashExternalProxyGroups({
+            rulesets: [],
+            proxyGroups: [
+                { name: '🎥 奈飞节点', type: 'select', tokens: ['(NF|Netflix)'] }
+            ],
+            flags: {}
+        }, ['香港 01', '日本 01', '美国 NF']);
+
+        expect(groups).toEqual([
+            {
+                name: '🎥 奈飞节点',
+                type: 'select',
+                proxies: ['香港 01', '日本 01', '美国 NF'],
+                filter: '(NF|Netflix)'
             }
         ]);
     });
@@ -88,16 +108,17 @@ describe('buildClashExternalRules', () => {
         });
 
         expect(result.ruleProviders).toEqual({
-            subconverter_0: {
+            '规则集_节点选择': {
                 type: 'http',
                 behavior: 'classical',
+                format: 'text',
                 url: 'https://example.com/Proxy.list',
-                path: './ruleset/subconverter_0.yaml',
+                path: './ruleset/规则集_节点选择.yaml',
                 interval: 86400
             }
         });
         expect(result.rules).toEqual([
-            'RULE-SET,subconverter_0,🚀 节点选择',
+            'RULE-SET,规则集_节点选择,🚀 节点选择',
             'GEOIP,CN,🎯 全球直连',
             'MATCH,🐟 漏网之鱼'
         ]);
@@ -202,13 +223,37 @@ overwrite_original_rules=true`;
         expect(res.status).toBe(200);
         const text = await res.text();
         expect(text).toContain('rule-providers:');
-        expect(text).toContain('subconverter_0:');
-        expect(text).toContain('RULE-SET,subconverter_0,🎯 全球直连');
+        expect(text).toContain('规则集_全球直连:');
+        expect(text).toContain('RULE-SET,规则集_全球直连,🎯 全球直连');
         expect(text).toContain('GEOIP,CN,🎯 全球直连');
         expect(text).toContain('MATCH,🐟 漏网之鱼');
         expect(text).toContain('name: 🚀 节点选择');
         expect(text).toContain('name: 🇭🇰 香港节点');
         expect(text).toContain('filter: (港|HK|Hong Kong)');
+    });
+
+    it('clash target with external config includes proxies in url-test groups', async () => {
+        const externalConfig = `[custom]
+custom_proxy_group=🇭🇰 香港节点\`url-test\`(港|HK)\`http://www.gstatic.com/generate_204\`300,,50
+custom_proxy_group=🚀 节点选择\`select\`[]🇭🇰 香港节点\`[]DIRECT
+enable_rule_generator=true
+overwrite_original_rules=true`;
+
+        vi.stubGlobal('fetch', vi.fn(async (url) => {
+            if (String(url) === 'https://example.com/config.ini') {
+                return { ok: true, status: 200, text: async () => externalConfig };
+            }
+            throw new Error(`Unexpected fetch: ${url}`);
+        }));
+
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=clash&url=${encodeURIComponent(ssNode)}&config=${encodeURIComponent('https://example.com/config.ini')}`);
+        expect(res.status).toBe(200);
+        const text = await res.text();
+        const hkGroupMatch = text.match(/name: 🇭🇰 香港节点[\s\S]*?(?=\n  - name:|\nrules:)/);
+        expect(hkGroupMatch).toBeTruthy();
+        expect(hkGroupMatch[0]).toContain('proxies:');
+        expect(hkGroupMatch[0]).toContain('filter: (港|HK)');
     });
 
     it('returns 400 when external config cannot be fetched', async () => {

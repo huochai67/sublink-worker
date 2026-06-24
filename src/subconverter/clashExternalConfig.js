@@ -1,7 +1,25 @@
 const INLINE_PREFIX = '[]';
 
-function sanitizeProviderName(index) {
-    return `subconverter_${index}`;
+function sanitizeOutboundName(outbound) {
+    // Strip emoji and leading/trailing whitespace, replace spaces with underscores
+    const cleaned = outbound
+        .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '')
+        .replace(/\s+/g, '_')
+        .replace(/^_|_$/g, '');
+    return cleaned || 'rule';
+}
+
+function sanitizeProviderName(outbound, usedNames) {
+    const base = `规则集_${sanitizeOutboundName(outbound)}`;
+    if (!usedNames.has(base)) {
+        usedNames.add(base);
+        return base;
+    }
+    let i = 2;
+    while (usedNames.has(`${base}_${i}`)) i++;
+    const name = `${base}_${i}`;
+    usedNames.add(name);
+    return name;
 }
 
 function convertInlineRule(source, outbound) {
@@ -34,7 +52,7 @@ function appendProxyToken(proxies, token, proxyNames) {
 export function buildClashExternalRules(parsedConfig) {
     const ruleProviders = {};
     const rules = [];
-    let providerIndex = 0;
+    const usedNames = new Set();
 
     parsedConfig.rulesets.forEach(({ outbound, source }) => {
         if (source.startsWith(INLINE_PREFIX)) {
@@ -44,10 +62,11 @@ export function buildClashExternalRules(parsedConfig) {
         }
 
         if (/^https?:\/\//i.test(source)) {
-            const providerName = sanitizeProviderName(providerIndex++);
+            const providerName = sanitizeProviderName(outbound, usedNames);
             ruleProviders[providerName] = {
                 type: 'http',
                 behavior: 'classical',
+                format: 'text',
                 url: source,
                 path: `./ruleset/${providerName}.yaml`,
                 interval: 86400
@@ -61,28 +80,43 @@ export function buildClashExternalRules(parsedConfig) {
 
 export function buildClashExternalProxyGroups(parsedConfig, proxyNames = []) {
     return parsedConfig.proxyGroups.map(group => {
-        if (group.type === 'url-test' || group.type === 'fallback' || group.type === 'load-balance') {
-            const matchToken = group.tokens[0];
+        const isAutoType = group.type === 'url-test' || group.type === 'fallback' || group.type === 'load-balance';
+        const matchToken = group.tokens[0];
+
+        if (isAutoType) {
             const healthCheck = parseHealthCheckOptions(group.tokens.slice(1));
             const clashGroup = {
                 name: group.name,
                 type: group.type,
+                proxies: [...proxyNames],
                 ...healthCheck
             };
-            if (matchToken === '.*') {
-                clashGroup.proxies = [...proxyNames];
-            } else if (matchToken) {
+            if (matchToken && matchToken !== '.*') {
                 clashGroup.filter = matchToken;
             }
             return clashGroup;
         }
 
+        // select groups: collect explicit [] refs and .* expansions
         const proxies = [];
         group.tokens.forEach(token => appendProxyToken(proxies, token, proxyNames));
-        return {
+
+        // If no proxies resolved (e.g. all tokens are regex patterns), fall back to full list
+        if (proxies.length === 0) {
+            proxies.push(...proxyNames);
+        }
+
+        const result = {
             name: group.name,
             type: group.type,
             proxies
         };
+
+        // Attach filter for regex match tokens (not .* and not [] refs)
+        if (matchToken && matchToken !== '.*' && !matchToken.startsWith(INLINE_PREFIX)) {
+            result.filter = matchToken;
+        }
+
+        return result;
     });
 }
