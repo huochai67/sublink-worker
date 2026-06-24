@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { parseSubconverterExternalConfig } from '../src/subconverter/externalConfigParser.js';
 import { buildClashExternalRules, buildClashExternalProxyGroups } from '../src/subconverter/clashExternalConfig.js';
 import { createApp } from '../src/app/createApp.jsx';
@@ -163,5 +163,57 @@ describe('GET /sub compatibility endpoint', () => {
         const res = await app.request(`http://localhost/sub?target=unknown&url=${encodeURIComponent(ssNode)}`);
         expect(res.status).toBe(400);
         expect(await res.text()).toContain('Unsupported target');
+    });
+});
+
+describe('GET /sub with ACL4SSR-style external config', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it('generates rule providers, inline rules, and ACL4SSR proxy groups', async () => {
+        const externalConfig = `[custom]
+ruleset=🎯 全球直连,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/LocalAreaNetwork.list
+ruleset=🎯 全球直连,[]GEOIP,CN
+ruleset=🐟 漏网之鱼,[]FINAL
+custom_proxy_group=🚀 节点选择\`select\`[]♻️ 自动选择\`[]🇭🇰 香港节点\`[]DIRECT
+custom_proxy_group=♻️ 自动选择\`url-test\`.*\`http://www.gstatic.com/generate_204\`300,,50
+custom_proxy_group=🇭🇰 香港节点\`url-test\`(港|HK|Hong Kong)\`http://www.gstatic.com/generate_204\`300,,50
+enable_rule_generator=true
+overwrite_original_rules=true`;
+
+        vi.stubGlobal('fetch', vi.fn(async (url) => {
+            if (String(url) === 'https://example.com/ACL4SSR_Online_Full.ini') {
+                return { ok: true, status: 200, text: async () => externalConfig };
+            }
+            throw new Error(`Unexpected fetch: ${url}`);
+        }));
+
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=mihomo&url=${encodeURIComponent(ssNode)}&config=${encodeURIComponent('https://example.com/ACL4SSR_Online_Full.ini')}`);
+        expect(res.status).toBe(200);
+        const text = await res.text();
+        expect(text).toContain('rule-providers:');
+        expect(text).toContain('subconverter_0:');
+        expect(text).toContain('RULE-SET,subconverter_0,🎯 全球直连');
+        expect(text).toContain('GEOIP,CN,🎯 全球直连');
+        expect(text).toContain('MATCH,🐟 漏网之鱼');
+        expect(text).toContain('name: 🚀 节点选择');
+        expect(text).toContain('name: 🇭🇰 香港节点');
+        expect(text).toContain('filter: (港|HK|Hong Kong)');
+    });
+
+    it('returns 400 when external config cannot be fetched', async () => {
+        vi.stubGlobal('fetch', vi.fn(async (url) => {
+            if (String(url) === 'https://example.com/missing.ini') {
+                return { ok: false, status: 404, text: async () => 'not found' };
+            }
+            throw new Error(`Unexpected fetch: ${url}`);
+        }));
+
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=clash&url=${encodeURIComponent(ssNode)}&config=${encodeURIComponent('https://example.com/missing.ini')}`);
+        expect(res.status).toBe(400);
+        expect(await res.text()).toContain('Failed to fetch external config');
     });
 });

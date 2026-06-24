@@ -628,7 +628,8 @@ export class ClashConfigBuilder extends BaseConfigBuilder {
 
             const hasProxyRefs = Array.isArray(group.proxies) && group.proxies.length > 0;
             const hasProviderRefs = Array.isArray(group.use) && group.use.length > 0;
-            if (hasProxyRefs || hasProviderRefs) {
+            const hasFilter = typeof group.filter === 'string' && group.filter.length > 0;
+            if (hasProxyRefs || hasProviderRefs || hasFilter) {
                 return;
             }
 
