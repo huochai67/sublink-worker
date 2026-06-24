@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { parseSubconverterExternalConfig } from '../src/subconverter/externalConfigParser.js';
 import { buildClashExternalRules, buildClashExternalProxyGroups } from '../src/subconverter/clashExternalConfig.js';
+import { createApp } from '../src/app/createApp.jsx';
+import { MemoryKVAdapter } from '../src/adapters/kv/memoryKv.js';
 
 describe('parseSubconverterExternalConfig', () => {
     it('parses rulesets, proxy groups, and flags from a custom section', () => {
@@ -99,5 +101,67 @@ describe('buildClashExternalRules', () => {
             'GEOIP,CN,🎯 全球直连',
             'MATCH,🐟 漏网之鱼'
         ]);
+    });
+});
+
+const createTestApp = (overrides = {}) => createApp({
+    kv: overrides.kv ?? new MemoryKVAdapter(),
+    assetFetcher: overrides.assetFetcher ?? null,
+    logger: console,
+    config: {
+        configTtlSeconds: 60,
+        shortLinkTtlSeconds: null,
+        ...(overrides.config || {})
+    }
+});
+
+const ssNode = 'ss://YWVzLTEyOC1nY206cGFzc3dvcmRAMTI3LjAuMC4xOjgzODg=#香港 01';
+
+describe('GET /sub compatibility endpoint', () => {
+    it('defaults to Clash output when target is omitted', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?url=${encodeURIComponent(ssNode)}`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-type')).toContain('text/yaml');
+        const text = await res.text();
+        expect(text).toContain('proxies:');
+    });
+
+    it('supports mihomo as a Clash alias', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=mihomo&url=${encodeURIComponent(ssNode)}`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-type')).toContain('text/yaml');
+    });
+
+    it('supports singbox target', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=singbox&url=${encodeURIComponent(ssNode)}`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-type')).toContain('application/json');
+        const json = await res.json();
+        expect(json.outbounds).toBeDefined();
+    });
+
+    it('supports v2ray target as base64 node list', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=v2ray&url=${encodeURIComponent(ssNode)}`);
+        expect(res.status).toBe(200);
+        const text = await res.text();
+        expect(text).toMatch(/^[A-Za-z0-9+/=]+$/);
+    });
+
+    it('returns 400 when url is missing', async () => {
+        const app = createTestApp();
+        const res = await app.request('http://localhost/sub?target=clash');
+        expect(res.status).toBe(400);
+        expect(await res.text()).toContain('Missing url parameter');
+    });
+
+    it('returns 400 for unsupported target', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=unknown&url=${encodeURIComponent(ssNode)}`);
+        expect(res.status).toBe(400);
+        expect(await res.text()).toContain('Unsupported target');
     });
 });

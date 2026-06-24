@@ -17,8 +17,34 @@ import { ConfigStorageService } from '../services/configStorageService.js';
 import { ServiceError, MissingDependencyError } from '../services/errors.js';
 import { normalizeRuntime } from '../runtime/runtimeConfig.js';
 import { PREDEFINED_RULE_SETS, SING_BOX_CONFIG, SING_BOX_CONFIG_V1_11, generateSubconverterConfig } from '../config/index.js';
+import { parseSubconverterExternalConfig } from '../subconverter/externalConfigParser.js';
 
 const DEFAULT_USER_AGENT = 'curl/7.74.0';
+
+const CLASH_SUB_TARGETS = new Set(['clash', 'mihomo', 'clashr']);
+
+function normalizeSubTarget(rawTarget) {
+    return String(rawTarget || 'clash').trim().toLowerCase();
+}
+
+async function fetchExternalSubconverterConfig(configUrl) {
+    if (!configUrl) return null;
+    let parsedUrl;
+    try {
+        parsedUrl = new URL(configUrl);
+    } catch {
+        throw new ServiceError('Invalid external config URL', 400);
+    }
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+        throw new ServiceError('Invalid external config URL', 400);
+    }
+
+    const response = await fetch(parsedUrl.toString());
+    if (!response.ok) {
+        throw new ServiceError(`Failed to fetch external config: ${response.status}`, 400);
+    }
+    return parseSubconverterExternalConfig(await response.text());
+}
 
 export function createApp(bindings = {}) {
     const runtime = normalizeRuntime(bindings);
@@ -308,6 +334,73 @@ export function createApp(bindings = {}) {
         }
 
         return c.text(encodeBase64(finalString), 200, responseHeaders);
+    });
+
+    app.get('/sub', async (c) => {
+        try {
+            const input = c.req.query('url');
+            if (!input) return c.text('Missing url parameter', 400);
+
+            const target = normalizeSubTarget(c.req.query('target'));
+            const ua = c.req.query('ua') || getRequestHeader(c.req, 'User-Agent') || DEFAULT_USER_AGENT;
+            const selectedRules = parseSelectedRules(c.req.query('selectedRules'));
+            const customRules = parseJsonArray(c.req.query('customRules'));
+            const lang = c.get('lang');
+            const groupByCountry = parseBooleanFlag(c.req.query('group_by_country'));
+            const includeAutoSelect = c.req.query('include_auto_select') !== 'false';
+
+            if (CLASH_SUB_TARGETS.has(target)) {
+                const externalConfig = await fetchExternalSubconverterConfig(c.req.query('config'));
+                const builder = new ClashConfigBuilder(
+                    input,
+                    selectedRules,
+                    customRules,
+                    undefined,
+                    lang,
+                    ua,
+                    groupByCountry,
+                    parseBooleanFlag(c.req.query('enable_clash_ui')),
+                    c.req.query('external_controller'),
+                    c.req.query('external_ui_download_url'),
+                    includeAutoSelect,
+                    externalConfig
+                );
+                await builder.build();
+                const headers = { 'Content-Type': 'text/yaml; charset=utf-8' };
+                const userinfo = builder.getSubscriptionUserinfo();
+                if (userinfo) headers['subscription-userinfo'] = userinfo;
+                return c.text(builder.formatConfig(), 200, headers);
+            }
+
+            if (target === 'singbox') {
+                const builder = new SingboxConfigBuilder(input, selectedRules, customRules, SING_BOX_CONFIG, lang, ua, groupByCountry, false, undefined, undefined, '1.12', includeAutoSelect);
+                await builder.build();
+                const userinfo = builder.getSubscriptionUserinfo();
+                if (userinfo) c.header('subscription-userinfo', userinfo);
+                return c.json(builder.config);
+            }
+
+            if (target === 'surge') {
+                const builder = new SurgeConfigBuilder(input, selectedRules, customRules, undefined, lang, ua, groupByCountry, includeAutoSelect);
+                builder.setSubscriptionUrl(c.req.url);
+                await builder.build();
+                const userinfo = builder.getSubscriptionUserinfo();
+                if (userinfo) c.header('subscription-userinfo', userinfo);
+                return c.text(builder.formatConfig());
+            }
+
+            if (target === 'v2ray' || target === 'xray') {
+                const processed = tryDecodeSubscriptionLines(input);
+                const lines = Array.isArray(processed) ? processed : [processed];
+                const finalString = lines.filter(item => typeof item === 'string' && item.trim() !== '').join('\n');
+                if (!finalString) return c.text('Missing url parameter', 400);
+                return c.text(encodeBase64(finalString));
+            }
+
+            return c.text(`Unsupported target: ${target}`, 400);
+        } catch (error) {
+            return handleError(c, error, runtime.logger);
+        }
     });
 
     app.get('/shorten-v2', async (c) => {
