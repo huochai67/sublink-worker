@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parseSubconverterExternalConfig } from '../src/subconverter/externalConfigParser.js';
-import { buildClashExternalRules } from '../src/subconverter/clashExternalConfig.js';
+import { buildClashExternalRules, buildClashExternalProxyGroups } from '../src/subconverter/clashExternalConfig.js';
 
 describe('parseSubconverterExternalConfig', () => {
     it('parses rulesets, proxy groups, and flags from a custom section', () => {
@@ -31,8 +31,46 @@ ruleset=ignored,[]FINAL
         expect(parsed.flags).toEqual({
             enableRuleGenerator: true,
             overwriteOriginalRules: true
-        });
     });
+});
+
+describe('buildClashExternalProxyGroups', () => {
+    it('converts select and url-test groups from external config', () => {
+        const groups = buildClashExternalProxyGroups({
+            rulesets: [],
+            proxyGroups: [
+                { name: '🚀 节点选择', type: 'select', tokens: ['[]♻️ 自动选择', '[]DIRECT', '.*'] },
+                { name: '♻️ 自动选择', type: 'url-test', tokens: ['.*', 'http://www.gstatic.com/generate_204', '300,,50'] },
+                { name: '🇭🇰 香港节点', type: 'url-test', tokens: ['(港|HK)', 'http://www.gstatic.com/generate_204', '300,,50'] }
+            ],
+            flags: {}
+        }, ['香港 01', '日本 01']);
+
+        expect(groups).toEqual([
+            {
+                name: '🚀 节点选择',
+                type: 'select',
+                proxies: ['♻️ 自动选择', 'DIRECT', '香港 01', '日本 01']
+            },
+            {
+                name: '♻️ 自动选择',
+                type: 'url-test',
+                proxies: ['香港 01', '日本 01'],
+                url: 'http://www.gstatic.com/generate_204',
+                interval: 300,
+                tolerance: 50
+            },
+            {
+                name: '🇭🇰 香港节点',
+                type: 'url-test',
+                filter: '(港|HK)',
+                url: 'http://www.gstatic.com/generate_204',
+                interval: 300,
+                tolerance: 50
+            }
+        ]);
+    });
+});
 });
 
 describe('buildClashExternalRules', () => {
