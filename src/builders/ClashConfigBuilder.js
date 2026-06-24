@@ -7,6 +7,7 @@ import { buildSelectorMembers, buildNodeSelectMembers, buildCustomRuleMembers, u
 import { emitClashRules, sanitizeClashProxyGroups } from './helpers/clashConfigUtils.js';
 import { normalizeGroupName, findGroupIndexByName } from './helpers/groupNameUtils.js';
 import { InvalidConfigError } from '../services/errors.js';
+import { buildClashExternalProxyGroups, buildClashExternalRules } from '../subconverter/clashExternalConfig.js';
 
 /**
  * Check if the client supports MRS (Meta Rule Set) format
@@ -48,7 +49,7 @@ function getClashUdpValue(proxy, defaultEnabled = true) {
 }
 
 export class ClashConfigBuilder extends BaseConfigBuilder {
-    constructor(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry = false, enableClashUI = false, externalController, externalUiDownloadUrl, includeAutoSelect = true) {
+    constructor(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry = false, enableClashUI = false, externalController, externalUiDownloadUrl, includeAutoSelect = true, externalConfig = null) {
         if (!baseConfig) {
             baseConfig = CLASH_CONFIG;
         }
@@ -60,6 +61,7 @@ export class ClashConfigBuilder extends BaseConfigBuilder {
         this.enableClashUI = enableClashUI;
         this.externalController = externalController;
         this.externalUiDownloadUrl = externalUiDownloadUrl;
+        this.externalConfig = externalConfig;
     }
 
     /**
@@ -642,6 +644,28 @@ export class ClashConfigBuilder extends BaseConfigBuilder {
         return generateRules(this.selectedRules, this.customRules);
     }
 
+    applyExternalConfigOverrides() {
+        if (!this.externalConfig) return;
+
+        const proxies = this.getProxies();
+        const proxyNames = proxies.map(proxy => this.getProxyName(proxy)).filter(Boolean);
+        const proxyGroups = buildClashExternalProxyGroups(this.externalConfig, proxyNames);
+        const { ruleProviders, rules } = buildClashExternalRules(this.externalConfig);
+
+        if (proxyGroups.length > 0) {
+            this.config['proxy-groups'] = proxyGroups;
+        }
+        if (Object.keys(ruleProviders).length > 0) {
+            this.config['rule-providers'] = {
+                ...this.config['rule-providers'],
+                ...ruleProviders
+            };
+        }
+        if (rules.length > 0) {
+            this.config.rules = rules;
+        }
+    }
+
     formatConfig() {
         const rules = this.generateRules();
         const useMrs = supportsMrsFormat(this.userAgent);
@@ -688,6 +712,8 @@ export class ClashConfigBuilder extends BaseConfigBuilder {
             this.config['external-ui-url'] = uiUrl;
             this.config['secret'] = secret;
         }
+
+        this.applyExternalConfigOverrides();
 
         return yaml.dump(this.config);
     }
