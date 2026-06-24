@@ -621,7 +621,7 @@ export class ClashConfigBuilder extends BaseConfigBuilder {
      */
     validateProxyGroups() {
         (this.config['proxy-groups'] || []).forEach(group => {
-            const requiresMembers = group?.type === 'url-test' || group?.type === 'fallback';
+            const requiresMembers = group?.type === 'url-test' || group?.type === 'fallback' || group?.type === 'load-balance';
             if (!requiresMembers) {
                 return;
             }

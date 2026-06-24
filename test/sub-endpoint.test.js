@@ -33,6 +33,7 @@ ruleset=ignored,[]FINAL
         expect(parsed.flags).toEqual({
             enableRuleGenerator: true,
             overwriteOriginalRules: true
+        });
     });
 });
 
@@ -72,7 +73,6 @@ describe('buildClashExternalProxyGroups', () => {
             }
         ]);
     });
-});
 });
 
 describe('buildClashExternalRules', () => {
@@ -163,6 +163,14 @@ describe('GET /sub compatibility endpoint', () => {
         const res = await app.request(`http://localhost/sub?target=unknown&url=${encodeURIComponent(ssNode)}`);
         expect(res.status).toBe(400);
         expect(await res.text()).toContain('Unsupported target');
+    });
+
+    it('supports surge target', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=surge&url=${encodeURIComponent(ssNode)}`);
+        expect(res.status).toBe(200);
+        const text = await res.text();
+        expect(text).toContain('[General]');
     });
 });
 
