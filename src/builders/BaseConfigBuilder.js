@@ -4,7 +4,7 @@ import { createTranslator } from '../i18n/index.js';
 import { generateRules, getOutbounds, PREDEFINED_RULE_SETS } from '../config/index.js';
 
 export class BaseConfigBuilder {
-    constructor(inputString, baseConfig, lang, userAgent, groupByCountry = false, includeAutoSelect = true) {
+    constructor(inputString, baseConfig, lang, userAgent, groupByCountry = false, includeAutoSelect = true, includeRegex = null, excludeRegex = null) {
         this.inputString = inputString;
         this.config = deepCopy(baseConfig);
         this.customRules = [];
@@ -17,6 +17,8 @@ export class BaseConfigBuilder {
         this.providerUrls = [];  // URLs to use as providers (auto-sync)
         this.autoProviderDescriptors = undefined;
         this.subscriptionUserinfo = undefined;
+        this.includeRegex = includeRegex;
+        this.excludeRegex = excludeRegex;
     }
 
     async build() {
@@ -361,6 +363,13 @@ export class BaseConfigBuilder {
         const validItems = customItems.filter(item => item != null);
         validItems.forEach(item => {
             if (item?.tag) {
+                // Apply include/exclude filters
+                if (this.includeRegex && !this.includeRegex.test(item.tag)) {
+                    return;
+                }
+                if (this.excludeRegex && this.excludeRegex.test(item.tag)) {
+                    return;
+                }
                 const convertedProxy = this.convertProxy(item);
                 if (convertedProxy) {
                     this.addProxyToConfig(convertedProxy);

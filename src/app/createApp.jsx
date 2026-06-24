@@ -348,6 +348,27 @@ export function createApp(bindings = {}) {
             const lang = c.get('lang');
             const groupByCountry = parseBooleanFlag(c.req.query('group_by_country'));
             const includeAutoSelect = c.req.query('include_auto_select') !== 'false';
+            const filename = c.req.query('filename');
+            const includeParam = c.req.query('include');
+            const excludeParam = c.req.query('exclude');
+
+            // Parse include/exclude regex
+            let includeRegex = null;
+            let excludeRegex = null;
+            try {
+                if (includeParam) {
+                    includeRegex = new RegExp(includeParam);
+                }
+            } catch (e) {
+                return c.text('Invalid include regex pattern', 400);
+            }
+            try {
+                if (excludeParam) {
+                    excludeRegex = new RegExp(excludeParam);
+                }
+            } catch (e) {
+                return c.text('Invalid exclude regex pattern', 400);
+            }
 
             if (CLASH_SUB_TARGETS.has(target)) {
                 const externalConfig = await fetchExternalSubconverterConfig(c.req.query('config'));
@@ -363,30 +384,43 @@ export function createApp(bindings = {}) {
                     c.req.query('external_controller'),
                     c.req.query('external_ui_download_url'),
                     includeAutoSelect,
-                    externalConfig
+                    externalConfig,
+                    includeRegex,
+                    excludeRegex
                 );
                 await builder.build();
                 const headers = { 'Content-Type': 'text/yaml; charset=utf-8' };
+                if (filename) {
+                    headers['Content-Disposition'] = `attachment; filename="${filename}.yaml"`;
+                }
                 const userinfo = builder.getSubscriptionUserinfo();
                 if (userinfo) headers['subscription-userinfo'] = userinfo;
                 return c.text(builder.formatConfig(), 200, headers);
             }
 
             if (target === 'singbox') {
-                const builder = new SingboxConfigBuilder(input, selectedRules, customRules, SING_BOX_CONFIG, lang, ua, groupByCountry, false, undefined, undefined, '1.12', includeAutoSelect);
+                const builder = new SingboxConfigBuilder(input, selectedRules, customRules, SING_BOX_CONFIG, lang, ua, groupByCountry, false, undefined, undefined, '1.12', includeAutoSelect, includeRegex, excludeRegex);
                 await builder.build();
+                const headers = { 'Content-Type': 'application/json' };
+                if (filename) {
+                    headers['Content-Disposition'] = `attachment; filename="${filename}.json"`;
+                }
                 const userinfo = builder.getSubscriptionUserinfo();
-                if (userinfo) c.header('subscription-userinfo', userinfo);
-                return c.json(builder.config);
+                if (userinfo) headers['subscription-userinfo'] = userinfo;
+                return c.json(builder.config, 200, headers);
             }
 
             if (target === 'surge') {
-                const builder = new SurgeConfigBuilder(input, selectedRules, customRules, undefined, lang, ua, groupByCountry, includeAutoSelect);
+                const builder = new SurgeConfigBuilder(input, selectedRules, customRules, undefined, lang, ua, groupByCountry, includeAutoSelect, includeRegex, excludeRegex);
                 builder.setSubscriptionUrl(c.req.url);
                 await builder.build();
+                const headers = { 'Content-Type': 'text/plain; charset=utf-8' };
+                if (filename) {
+                    headers['Content-Disposition'] = `attachment; filename="${filename}.conf"`;
+                }
                 const userinfo = builder.getSubscriptionUserinfo();
-                if (userinfo) c.header('subscription-userinfo', userinfo);
-                return c.text(builder.formatConfig());
+                if (userinfo) headers['subscription-userinfo'] = userinfo;
+                return c.text(builder.formatConfig(), 200, headers);
             }
 
             if (target === 'v2ray' || target === 'xray') {
@@ -394,7 +428,11 @@ export function createApp(bindings = {}) {
                 const lines = Array.isArray(processed) ? processed : [processed];
                 const finalString = lines.filter(item => typeof item === 'string' && item.trim() !== '').join('\n');
                 if (!finalString) return c.text('Missing url parameter', 400);
-                return c.text(encodeBase64(finalString));
+                const headers = { 'Content-Type': 'text/plain; charset=utf-8' };
+                if (filename) {
+                    headers['Content-Disposition'] = `attachment; filename="${filename}.txt"`;
+                }
+                return c.text(encodeBase64(finalString), 200, headers);
             }
 
             return c.text(`Unsupported target: ${target}`, 400);

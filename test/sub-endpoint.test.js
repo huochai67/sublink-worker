@@ -270,3 +270,118 @@ overwrite_original_rules=true`;
         expect(await res.text()).toContain('Failed to fetch external config');
     });
 });
+
+describe('GET /sub with include/exclude filters', () => {
+    const multiNodeInput = [
+        'ss://YWVzLTEyOC1nY206cGFzc3dvcmRAMTI3LjAuMC4xOjgzODg=#香港 01',
+        'ss://YWVzLTEyOC1nY206cGFzc3dvcmRAMTI0LjAuMC4xOjgzODg=#日本 01',
+        'ss://YWVzLTEyOC1nY206cGFzc3dvcmRAMTI1LjAuMC4xOjgzODg=#美国 01'
+    ].join('\n');
+
+    it('include filter only keeps matching nodes', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=clash&url=${encodeURIComponent(multiNodeInput)}&include=${encodeURIComponent('香港|日本')}`);
+        expect(res.status).toBe(200);
+        const text = await res.text();
+        expect(text).toContain('香港 01');
+        expect(text).toContain('日本 01');
+        expect(text).not.toContain('美国 01');
+    });
+
+    it('exclude filter removes matching nodes', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=clash&url=${encodeURIComponent(multiNodeInput)}&exclude=${encodeURIComponent('美国')}`);
+        expect(res.status).toBe(200);
+        const text = await res.text();
+        expect(text).toContain('香港 01');
+        expect(text).toContain('日本 01');
+        expect(text).not.toContain('美国 01');
+    });
+
+    it('include and exclude filters work together', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=clash&url=${encodeURIComponent(multiNodeInput)}&include=${encodeURIComponent('香港|日本|美国')}&exclude=${encodeURIComponent('日本')}`);
+        expect(res.status).toBe(200);
+        const text = await res.text();
+        expect(text).toContain('香港 01');
+        expect(text).not.toContain('日本 01');
+        expect(text).toContain('美国 01');
+    });
+
+    it('returns 400 for invalid include regex', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=clash&url=${encodeURIComponent(multiNodeInput)}&include=${encodeURIComponent('[invalid')}`);
+        expect(res.status).toBe(400);
+        expect(await res.text()).toContain('Invalid include regex pattern');
+    });
+
+    it('returns 400 for invalid exclude regex', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=clash&url=${encodeURIComponent(multiNodeInput)}&exclude=${encodeURIComponent('[invalid')}`);
+        expect(res.status).toBe(400);
+        expect(await res.text()).toContain('Invalid exclude regex pattern');
+    });
+
+    it('include filter works with singbox target', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=singbox&url=${encodeURIComponent(multiNodeInput)}&include=${encodeURIComponent('香港')}`);
+        expect(res.status).toBe(200);
+        const json = await res.json();
+        const outbounds = json.outbounds || [];
+        const proxyOutbound = outbounds.find(o => o.tag === 'proxy' || o.type === 'direct');
+        // Check that only Hong Kong node is present in outbounds
+        const allOutboundTags = outbounds.flatMap(o => o.outbounds || []).flat();
+        expect(allOutboundTags).toContain('香港 01');
+        expect(allOutboundTags).not.toContain('日本 01');
+        expect(allOutboundTags).not.toContain('美国 01');
+    });
+
+    it('exclude filter works with surge target', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=surge&url=${encodeURIComponent(multiNodeInput)}&exclude=${encodeURIComponent('美国')}`);
+        expect(res.status).toBe(200);
+        const text = await res.text();
+        expect(text).toContain('香港 01');
+        expect(text).toContain('日本 01');
+        expect(text).not.toContain('美国 01');
+    });
+});
+
+describe('GET /sub with filename parameter', () => {
+    const ssNode = 'ss://YWVzLTEyOC1nY206cGFzc3dvcmRAMTI3LjAuMC4xOjgzODg=#香港 01';
+
+    it('sets Content-Disposition header for clash target', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=clash&url=${encodeURIComponent(ssNode)}&filename=MyConfig`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-disposition')).toBe('attachment; filename="MyConfig.yaml"');
+    });
+
+    it('sets Content-Disposition header for singbox target', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=singbox&url=${encodeURIComponent(ssNode)}&filename=MyConfig`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-disposition')).toBe('attachment; filename="MyConfig.json"');
+    });
+
+    it('sets Content-Disposition header for surge target', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=surge&url=${encodeURIComponent(ssNode)}&filename=MyConfig`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-disposition')).toBe('attachment; filename="MyConfig.conf"');
+    });
+
+    it('sets Content-Disposition header for v2ray target', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=v2ray&url=${encodeURIComponent(ssNode)}&filename=MyConfig`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-disposition')).toBe('attachment; filename="MyConfig.txt"');
+    });
+
+    it('does not set Content-Disposition when filename is not provided', async () => {
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=clash&url=${encodeURIComponent(ssNode)}`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-disposition')).toBeNull();
+    });
+});
