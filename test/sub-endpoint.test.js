@@ -331,6 +331,59 @@ proxies:
         expect(text).not.toContain('rule-set:FakeIpFilter');
     });
 
+    it('clash target with external config supports pipe-separated upstream sources', async () => {
+        const externalConfig = `[custom]
+custom_proxy_group=♻️ 自动选择\`url-test\`.*\`http://www.gstatic.com/generate_204\`300,,50
+custom_proxy_group=🚀 节点选择\`select\`[]♻️ 自动选择\`[]DIRECT
+enable_rule_generator=true
+overwrite_original_rules=true`;
+        const upstreamSingbox = JSON.stringify({
+            outbounds: [
+                {
+                    type: 'shadowsocks',
+                    tag: 'SG-Node',
+                    server: 'sg.example.com',
+                    server_port: 443,
+                    method: 'aes-128-gcm',
+                    password: 'test123'
+                }
+            ]
+        });
+        const upstreamUriList = 'ss://YWVzLTEyOC1nY206cGFzc3dvcmRAMTI3LjAuMC4xOjgzODg=#HK-Node';
+
+        vi.stubGlobal('fetch', vi.fn(async (url) => {
+            if (String(url) === 'https://example.com/ACL4SSR_Online_Full.ini') {
+                return { ok: true, status: 200, text: async () => externalConfig };
+            }
+            if (String(url) === 'https://example.com/upstream-singbox.json') {
+                return {
+                    ok: true,
+                    status: 200,
+                    text: async () => upstreamSingbox,
+                    headers: new Headers()
+                };
+            }
+            if (String(url) === 'https://example.com/rawv2b64') {
+                return {
+                    ok: true,
+                    status: 200,
+                    text: async () => upstreamUriList,
+                    headers: new Headers()
+                };
+            }
+            throw new Error(`Unexpected fetch: ${url}`);
+        }));
+
+        const app = createTestApp();
+        const mixedSources = 'https://example.com/upstream-singbox.json|https://example.com/rawv2b64';
+        const res = await app.request(`http://localhost/sub?target=clash&url=${encodeURIComponent(mixedSources)}&config=${encodeURIComponent('https://example.com/ACL4SSR_Online_Full.ini')}`);
+        expect(res.status).toBe(200);
+        const text = await res.text();
+        expect(text).toContain('name: SG-Node');
+        expect(text).toContain('name: HK-Node');
+        expect(text).toContain('name: ♻️ 自动选择');
+    });
+
     it('returns 400 when external config cannot be fetched', async () => {
         vi.stubGlobal('fetch', vi.fn(async (url) => {
             if (String(url) === 'https://example.com/missing.ini') {

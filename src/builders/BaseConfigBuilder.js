@@ -77,8 +77,12 @@ export class BaseConfigBuilder {
             } catch (_) { }
         }
 
-        // Otherwise, line-by-line processing (URLs, subscription content, remote lists, etc.)
-        const urls = input.split('\n').filter(url => url.trim() !== '');
+        // Otherwise, process each source entry. Some callers join multiple
+        // remote subscriptions with `|`, mirroring legacy subconverter inputs.
+        const urls = input
+            .split(/\r?\n|\|/)
+            .map(url => url.trim())
+            .filter(url => url !== '');
         for (const url of urls) {
             let processedUrls = tryDecodeSubscriptionLines(url);
             if (!Array.isArray(processedUrls)) {
