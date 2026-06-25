@@ -78,7 +78,7 @@ export function buildClashExternalRules(parsedConfig) {
     return { ruleProviders, rules };
 }
 
-export function buildClashExternalProxyGroups(parsedConfig, proxyNames = []) {
+export function buildClashExternalProxyGroups(parsedConfig, proxyNames = [], providerNames = []) {
     return parsedConfig.proxyGroups.map(group => {
         const isAutoType = group.type === 'url-test' || group.type === 'fallback' || group.type === 'load-balance';
         const matchToken = group.tokens[0];
@@ -88,9 +88,14 @@ export function buildClashExternalProxyGroups(parsedConfig, proxyNames = []) {
             const clashGroup = {
                 name: group.name,
                 type: group.type,
-                proxies: [...proxyNames],
                 ...healthCheck
             };
+            if (proxyNames.length > 0) {
+                clashGroup.proxies = [...proxyNames];
+            }
+            if (providerNames.length > 0) {
+                clashGroup.use = [...providerNames];
+            }
             if (matchToken && matchToken !== '.*') {
                 clashGroup.filter = matchToken;
             }
@@ -111,6 +116,9 @@ export function buildClashExternalProxyGroups(parsedConfig, proxyNames = []) {
             type: group.type,
             proxies
         };
+        if (providerNames.length > 0) {
+            result.use = [...providerNames];
+        }
 
         // Attach filter for regex match tokens (not .* and not [] refs)
         if (matchToken && matchToken !== '.*' && !matchToken.startsWith(INLINE_PREFIX)) {

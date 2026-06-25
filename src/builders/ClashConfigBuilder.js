@@ -48,6 +48,16 @@ function getClashUdpValue(proxy, defaultEnabled = true) {
     return defaultEnabled;
 }
 
+function hasAllReferencedRuleSets(expression, availableRuleSets) {
+    const refs = String(expression)
+        .slice('rule-set:'.length)
+        .split(',')
+        .map(item => item.trim())
+        .filter(Boolean);
+
+    return refs.length > 0 && refs.every(ref => availableRuleSets.has(ref));
+}
+
 export class ClashConfigBuilder extends BaseConfigBuilder {
     constructor(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry = false, enableClashUI = false, externalController, externalUiDownloadUrl, includeAutoSelect = true, externalConfig = null, includeRegex = null, excludeRegex = null) {
         if (!baseConfig) {
@@ -70,6 +80,9 @@ export class ClashConfigBuilder extends BaseConfigBuilder {
      * @returns {boolean} - True if format is Clash YAML
      */
     isCompatibleProviderFormat(format) {
+        if (this.externalConfig) {
+            return false;
+        }
         return format === 'clash';
     }
 
@@ -645,29 +658,69 @@ export class ClashConfigBuilder extends BaseConfigBuilder {
         return generateRules(this.selectedRules, this.customRules);
     }
 
-    applyExternalConfigOverrides() {
-        if (!this.externalConfig) return;
+    getExternalConfigArtifacts() {
+        if (!this.externalConfig) return null;
 
         const proxies = this.getProxies();
         const proxyNames = proxies.map(proxy => this.getProxyName(proxy)).filter(Boolean);
-        const proxyGroups = buildClashExternalProxyGroups(this.externalConfig, proxyNames);
+        const providerNames = this.getAllProviderNames();
+        const proxyGroups = buildClashExternalProxyGroups(this.externalConfig, proxyNames, providerNames);
         const { ruleProviders, rules } = buildClashExternalRules(this.externalConfig);
 
-        if (proxyGroups.length > 0) {
-            this.config['proxy-groups'] = proxyGroups;
+        return { proxyGroups, ruleProviders, rules };
+    }
+
+    applyExternalProxyGroupOverrides(externalArtifacts) {
+        if (externalArtifacts?.proxyGroups?.length > 0) {
+            this.config['proxy-groups'] = externalArtifacts.proxyGroups;
         }
-        if (Object.keys(ruleProviders).length > 0) {
+    }
+
+    applyExternalRuleOverrides(externalArtifacts) {
+        if (!externalArtifacts) return;
+
+        if (Object.keys(externalArtifacts.ruleProviders || {}).length > 0) {
             this.config['rule-providers'] = {
                 ...this.config['rule-providers'],
-                ...ruleProviders
+                ...externalArtifacts.ruleProviders
             };
         }
-        if (rules.length > 0) {
-            this.config.rules = rules;
+        if (externalArtifacts.rules?.length > 0) {
+            this.config.rules = externalArtifacts.rules;
+        }
+    }
+
+    sanitizeDnsRuleSetReferences() {
+        const dns = this.config?.dns;
+        if (!dns || typeof dns !== 'object') return;
+
+        const availableRuleSets = new Set(Object.keys(this.config?.['rule-providers'] || {}));
+
+        if (dns['nameserver-policy'] && typeof dns['nameserver-policy'] === 'object' && !Array.isArray(dns['nameserver-policy'])) {
+            dns['nameserver-policy'] = Object.fromEntries(
+                Object.entries(dns['nameserver-policy']).filter(([matcher]) => {
+                    if (!String(matcher).startsWith('rule-set:')) {
+                        return true;
+                    }
+                    return hasAllReferencedRuleSets(matcher, availableRuleSets);
+                })
+            );
+        }
+
+        if (Array.isArray(dns['fake-ip-filter'])) {
+            dns['fake-ip-filter'] = dns['fake-ip-filter'].filter(entry => {
+                if (typeof entry !== 'string' || !entry.startsWith('rule-set:')) {
+                    return true;
+                }
+                return hasAllReferencedRuleSets(entry, availableRuleSets);
+            });
         }
     }
 
     formatConfig() {
+        const externalArtifacts = this.getExternalConfigArtifacts();
+        this.applyExternalProxyGroupOverrides(externalArtifacts);
+
         const rules = this.generateRules();
         const useMrs = supportsMrsFormat(this.userAgent);
         const { site_rule_providers, ip_rule_providers } = generateClashRuleSets(this.selectedRules, this.customRules, useMrs);
@@ -693,6 +746,9 @@ export class ClashConfigBuilder extends BaseConfigBuilder {
             `MATCH,${this.t('outboundNames.Fall Back')}`
         ];
 
+        this.applyExternalRuleOverrides(externalArtifacts);
+        this.sanitizeDnsRuleSetReferences();
+
         // Enable Clash UI (external controller/dashboard) when requested or when custom UI params are provided
         if (this.enableClashUI || this.externalController || this.externalUiDownloadUrl) {
             const defaultController = '0.0.0.0:9090';
@@ -713,8 +769,6 @@ export class ClashConfigBuilder extends BaseConfigBuilder {
             this.config['external-ui-url'] = uiUrl;
             this.config['secret'] = secret;
         }
-
-        this.applyExternalConfigOverrides();
 
         return yaml.dump(this.config);
     }

@@ -93,6 +93,34 @@ describe('buildClashExternalProxyGroups', () => {
             }
         ]);
     });
+
+    it('uses proxy-providers when there are no inline proxies', () => {
+        const groups = buildClashExternalProxyGroups({
+            rulesets: [],
+            proxyGroups: [
+                { name: '♻️ 自动选择', type: 'url-test', tokens: ['.*', 'http://www.gstatic.com/generate_204', '300,,50'] },
+                { name: '🚀 节点选择', type: 'select', tokens: ['[]♻️ 自动选择', '[]DIRECT'] }
+            ],
+            flags: {}
+        }, [], ['provider-a']);
+
+        expect(groups).toEqual([
+            {
+                name: '♻️ 自动选择',
+                type: 'url-test',
+                use: ['provider-a'],
+                url: 'http://www.gstatic.com/generate_204',
+                interval: 300,
+                tolerance: 50
+            },
+            {
+                name: '🚀 节点选择',
+                type: 'select',
+                proxies: ['♻️ 自动选择', 'DIRECT'],
+                use: ['provider-a']
+            }
+        ]);
+    });
 });
 
 describe('buildClashExternalRules', () => {
@@ -254,6 +282,53 @@ overwrite_original_rules=true`;
         expect(hkGroupMatch).toBeTruthy();
         expect(hkGroupMatch[0]).toContain('proxies:');
         expect(hkGroupMatch[0]).toContain('filter: (港|HK)');
+    });
+
+    it('clash target with external config inlines upstream clash nodes', async () => {
+        const externalConfig = `[custom]
+custom_proxy_group=♻️ 自动选择\`url-test\`.*\`http://www.gstatic.com/generate_204\`300,,50
+custom_proxy_group=🚀 节点选择\`select\`[]♻️ 自动选择\`[]DIRECT
+enable_rule_generator=true
+overwrite_original_rules=true`;
+        const upstreamClash = `dns:
+  nameserver-policy:
+    rule-set:Direct,ChinaMedia,China:
+      - https://doh.pub/dns-query
+  fake-ip-filter:
+    - rule-set:FakeIpFilter
+proxies:
+  - name: HK-Node
+    type: ss
+    server: hk.example.com
+    port: 443
+    cipher: aes-128-gcm
+    password: test123`;
+
+        vi.stubGlobal('fetch', vi.fn(async (url) => {
+            if (String(url) === 'https://example.com/ACL4SSR_Online_Full.ini') {
+                return { ok: true, status: 200, text: async () => externalConfig };
+            }
+            if (String(url) === 'https://example.com/upstream-clash.yaml') {
+                return {
+                    ok: true,
+                    status: 200,
+                    text: async () => upstreamClash,
+                    headers: new Headers()
+                };
+            }
+            throw new Error(`Unexpected fetch: ${url}`);
+        }));
+
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=clash&url=${encodeURIComponent('https://example.com/upstream-clash.yaml')}&config=${encodeURIComponent('https://example.com/ACL4SSR_Online_Full.ini')}`);
+        expect(res.status).toBe(200);
+        const text = await res.text();
+        expect(text).toContain('proxies:');
+        expect(text).toContain('name: HK-Node');
+        expect(text).toContain('name: ♻️ 自动选择');
+        expect(text).not.toContain('proxy-providers:');
+        expect(text).not.toContain('rule-set:Direct');
+        expect(text).not.toContain('rule-set:FakeIpFilter');
     });
 
     it('returns 400 when external config cannot be fetched', async () => {
