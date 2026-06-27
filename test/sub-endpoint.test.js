@@ -66,7 +66,7 @@ describe('buildClashExternalProxyGroups', () => {
             {
                 name: '🇭🇰 香港节点',
                 type: 'url-test',
-                proxies: ['香港 01', '日本 01'],
+                proxies: ['香港 01'],
                 filter: '(港|HK)',
                 url: 'http://www.gstatic.com/generate_204',
                 interval: 300,
@@ -88,8 +88,44 @@ describe('buildClashExternalProxyGroups', () => {
             {
                 name: '🎥 奈飞节点',
                 type: 'select',
-                proxies: ['香港 01', '日本 01', '美国 NF'],
+                proxies: ['美国 NF'],
                 filter: '(NF|Netflix)'
+            }
+        ]);
+    });
+
+    it('country-named external groups do not expand .* to all proxies', () => {
+        const groups = buildClashExternalProxyGroups({
+            rulesets: [],
+            proxyGroups: [
+                { name: '🇭🇰 Hong Kong', type: 'url-test', tokens: ['.*', 'http://www.gstatic.com/generate_204', '300,,50'] },
+                { name: '🇯🇵 Japan', type: 'url-test', tokens: ['.*', 'http://www.gstatic.com/generate_204', '300,,50'] },
+                { name: '🚀 节点选择', type: 'select', tokens: ['[]🇭🇰 Hong Kong', '[]🇯🇵 Japan', '[]DIRECT'] }
+            ],
+            flags: {}
+        }, ['香港 01', '日本 01', '美国 01']);
+
+        expect(groups).toEqual([
+            {
+                name: '🇭🇰 Hong Kong',
+                type: 'url-test',
+                proxies: ['香港 01'],
+                url: 'http://www.gstatic.com/generate_204',
+                interval: 300,
+                tolerance: 50
+            },
+            {
+                name: '🇯🇵 Japan',
+                type: 'url-test',
+                proxies: ['日本 01'],
+                url: 'http://www.gstatic.com/generate_204',
+                interval: 300,
+                tolerance: 50
+            },
+            {
+                name: '🚀 节点选择',
+                type: 'select',
+                proxies: ['🇭🇰 Hong Kong', '🇯🇵 Japan', 'DIRECT']
             }
         ]);
     });
@@ -282,6 +318,47 @@ overwrite_original_rules=true`;
         expect(hkGroupMatch).toBeTruthy();
         expect(hkGroupMatch[0]).toContain('proxies:');
         expect(hkGroupMatch[0]).toContain('filter: (港|HK)');
+        expect(hkGroupMatch[0]).toContain('- 香港 01');
+        expect(hkGroupMatch[0]).not.toContain('日本');
+        expect(hkGroupMatch[0]).not.toContain('美国');
+    });
+
+    it('clash target with ACL4SSR-style country groups only keeps matching country nodes', async () => {
+        const externalConfig = `[custom]
+custom_proxy_group=🇭🇰 Hong Kong\`url-test\`.*\`http://www.gstatic.com/generate_204\`300,,50
+custom_proxy_group=🇯🇵 Japan\`url-test\`.*\`http://www.gstatic.com/generate_204\`300,,50
+custom_proxy_group=🚀 节点选择\`select\`[]🇭🇰 Hong Kong\`[]🇯🇵 Japan\`[]DIRECT
+enable_rule_generator=true
+overwrite_original_rules=true`;
+        const multiNodeInput = [
+            'ss://YWVzLTEyOC1nY206cGFzc3dvcmRAMTI3LjAuMC4xOjgzODg=#香港 01',
+            'ss://YWVzLTEyOC1nY206cGFzc3dvcmRAMTI0LjAuMC4xOjgzODg=#日本 01',
+            'ss://YWVzLTEyOC1nY206cGFzc3dvcmRAMTI1LjAuMC4xOjgzODg=#美国 01'
+        ].join('\n');
+
+        vi.stubGlobal('fetch', vi.fn(async (url) => {
+            if (String(url) === 'https://example.com/acl4ssr-country.ini') {
+                return { ok: true, status: 200, text: async () => externalConfig };
+            }
+            throw new Error(`Unexpected fetch: ${url}`);
+        }));
+
+        const app = createTestApp();
+        const res = await app.request(`http://localhost/sub?target=clash&url=${encodeURIComponent(multiNodeInput)}&config=${encodeURIComponent('https://example.com/acl4ssr-country.ini')}`);
+        expect(res.status).toBe(200);
+        const text = await res.text();
+
+        const hkGroupMatch = text.match(/name: 🇭🇰 Hong Kong[\s\S]*?(?=\n  - name:|\nrules:)/);
+        const jpGroupMatch = text.match(/name: 🇯🇵 Japan[\s\S]*?(?=\n  - name:|\nrules:)/);
+
+        expect(hkGroupMatch).toBeTruthy();
+        expect(jpGroupMatch).toBeTruthy();
+        expect(hkGroupMatch[0]).toContain('- 香港 01');
+        expect(hkGroupMatch[0]).not.toContain('日本 01');
+        expect(hkGroupMatch[0]).not.toContain('美国 01');
+        expect(jpGroupMatch[0]).toContain('- 日本 01');
+        expect(jpGroupMatch[0]).not.toContain('香港 01');
+        expect(jpGroupMatch[0]).not.toContain('美国 01');
     });
 
     it('clash target with external config inlines upstream clash nodes', async () => {

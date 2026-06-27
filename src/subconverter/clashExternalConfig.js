@@ -1,3 +1,5 @@
+import { parseCountryFromNodeName } from '../utils.js';
+
 const INLINE_PREFIX = '[]';
 
 function sanitizeOutboundName(outbound) {
@@ -38,6 +40,32 @@ function parseHealthCheckOptions(tokens) {
     return { url, interval, tolerance };
 }
 
+function uniqueNames(names) {
+    return [...new Set(names.filter(Boolean))];
+}
+
+function filterProxyNamesByToken(proxyNames, token) {
+    if (!token || token === '.*') {
+        return [...proxyNames];
+    }
+
+    try {
+        const regex = new RegExp(token, 'i');
+        return proxyNames.filter(name => regex.test(name));
+    } catch {
+        return [];
+    }
+}
+
+function filterProxyNamesByGroupName(proxyNames, groupName) {
+    const groupCountry = parseCountryFromNodeName(groupName);
+    if (!groupCountry) {
+        return null;
+    }
+
+    return proxyNames.filter(name => parseCountryFromNodeName(name)?.code === groupCountry.code);
+}
+
 function appendProxyToken(proxies, token, proxyNames) {
     if (token === '.*') {
         proxies.push(...proxyNames);
@@ -46,7 +74,10 @@ function appendProxyToken(proxies, token, proxyNames) {
     if (token.startsWith(INLINE_PREFIX)) {
         const name = token.slice(INLINE_PREFIX.length).trim();
         if (name) proxies.push(name);
+        return;
     }
+
+    proxies.push(...filterProxyNamesByToken(proxyNames, token));
 }
 
 export function buildClashExternalRules(parsedConfig) {
@@ -82,6 +113,7 @@ export function buildClashExternalProxyGroups(parsedConfig, proxyNames = [], pro
     return parsedConfig.proxyGroups.map(group => {
         const isAutoType = group.type === 'url-test' || group.type === 'fallback' || group.type === 'load-balance';
         const matchToken = group.tokens[0];
+        const countryMatchedProxies = filterProxyNamesByGroupName(proxyNames, group.name);
 
         if (isAutoType) {
             const healthCheck = parseHealthCheckOptions(group.tokens.slice(1));
@@ -90,8 +122,9 @@ export function buildClashExternalProxyGroups(parsedConfig, proxyNames = [], pro
                 type: group.type,
                 ...healthCheck
             };
-            if (proxyNames.length > 0) {
-                clashGroup.proxies = [...proxyNames];
+            const matchedProxies = countryMatchedProxies ?? filterProxyNamesByToken(proxyNames, matchToken);
+            if (matchedProxies.length > 0) {
+                clashGroup.proxies = uniqueNames(matchedProxies);
             }
             if (providerNames.length > 0) {
                 clashGroup.use = [...providerNames];
@@ -106,15 +139,19 @@ export function buildClashExternalProxyGroups(parsedConfig, proxyNames = [], pro
         const proxies = [];
         group.tokens.forEach(token => appendProxyToken(proxies, token, proxyNames));
 
+        if (countryMatchedProxies) {
+            proxies.push(...countryMatchedProxies);
+        }
+
         // If no proxies resolved (e.g. all tokens are regex patterns), fall back to full list
         if (proxies.length === 0) {
-            proxies.push(...proxyNames);
+            proxies.push(...(countryMatchedProxies ?? proxyNames));
         }
 
         const result = {
             name: group.name,
             type: group.type,
-            proxies
+            proxies: uniqueNames(proxies)
         };
         if (providerNames.length > 0) {
             result.use = [...providerNames];
